@@ -6,13 +6,21 @@ const transactionSchema = mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       required: true,
     },
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
+    kosOwnerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
     reference: {
       type: String,
       required: true,
     },
     status: {
       type: String,
-      default: "Menunggu pembayaran",
+      default: "UNPAID",
     },
     isPaid: {
       type: Boolean,

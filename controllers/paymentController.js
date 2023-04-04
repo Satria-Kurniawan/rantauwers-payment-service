@@ -26,7 +26,7 @@ const getPaymentChannel = async (req, res) => {
 };
 
 const requestTransaction = async (req, res) => {
-  const { paymentMethod, amount, orderItem } = req.body;
+  const { paymentMethod, amount, orderItem, kosOwnerId } = req.body;
   const merchant_code = "T11510";
 
   const expiry = parseInt(Math.floor(new Date() / 1000) + 24 * 60 * 60); //24 jam
@@ -41,7 +41,7 @@ const requestTransaction = async (req, res) => {
     amount: amount,
     customer_name: req.user.name,
     customer_email: req.user.email,
-    customer_phone: req.user.phone,
+    customer_phone: req.user.phone || 6281331815678,
     order_items: [orderItem],
     // callback_url:
     //   "https://963f-2001-448a-5010-847d-117f-9eab-bea2-6d04.ap.ngrok.io/api/payment/callback",
@@ -62,9 +62,25 @@ const requestTransaction = async (req, res) => {
   if (!response.data.success)
     return res.status(500).json("Payment gateway error");
 
+  amqp.connect(`${messageBrokerUri}:${messageBrokerPort}`, (err, conn) => {
+    if (err) throw err;
+
+    conn.createChannel((err, channel) => {
+      if (err) throw err;
+
+      const queueName = "transaction_created";
+
+      channel.assertQueue(queueName, { durable: false });
+
+      channel.sendToQueue(queueName, Buffer.from(req.params.orderId));
+    });
+  });
+
   const transaction = await Transaction.create({
     orderId: req.params.orderId,
+    customerId: req.user._id,
     reference: response.data.data.reference,
+    kosOwnerId,
   });
 
   res.status(201).json({
@@ -72,6 +88,24 @@ const requestTransaction = async (req, res) => {
     transaction,
     transactionDetail: response.data.data,
   });
+};
+
+const getTransactionsByUser = async (req, res) => {
+  try {
+    const transactions = await Transaction.find({ customerId: req.user._id });
+    res.json({ transactions });
+  } catch (error) {
+    res.status(500).json({ error });
+  }
+};
+
+const getTransactionsByAdmin = async (req, res) => {
+  try {
+    const transactions = await Transaction.find({ kosOwnerId: req.user._id });
+    res.json({ transactions });
+  } catch (error) {
+    res.status(500).json({ error });
+  }
 };
 
 const getTransactionDetail = async (req, res) => {
@@ -126,19 +160,19 @@ const tripayCallback = async (req, res) => {
 
   switch (data.status) {
     case "PAID": {
-      transaction.status = "Sudah dibayar";
+      transaction.status = "PAID";
       transaction.isPaid = true;
       transaction.save();
       break;
     }
     case "EXPIRED": {
-      transaction.status = "Expired";
+      transaction.status = "EXPIRED";
       transaction.isPaid = false;
       transaction.save();
       break;
     }
     case "FAILED": {
-      transaction.status = "Failed";
+      transaction.status = "FAILED";
       transaction.isPaid = false;
       transaction.save();
       break;
@@ -160,10 +194,6 @@ const tripayCallback = async (req, res) => {
 
         channel.assertQueue(queueName, { durable: false });
 
-        console.log(
-          `Sending request for order with id: ${transaction.orderId}`
-        );
-
         channel.assertQueue("order_queue_reply", { durable: false });
 
         channel.sendToQueue(queueName, Buffer.from(transaction.orderId), {
@@ -174,11 +204,6 @@ const tripayCallback = async (req, res) => {
           "order_queue_reply",
           async (msg) => {
             const order = JSON.parse(msg.content.toString());
-            console.log(
-              `Received response for order with id: ${transaction.orderId}`
-            );
-
-            if (!order) reject("Data order tidak didapatkan");
 
             const queueName2 = "payment_success";
             channel.assertQueue(queueName2, { durable: false });
@@ -198,6 +223,8 @@ const tripayCallback = async (req, res) => {
 module.exports = {
   getPaymentChannel,
   requestTransaction,
+  getTransactionsByUser,
+  getTransactionsByAdmin,
   getTransactionDetail,
   tripayCallback,
 };
